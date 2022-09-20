@@ -7,5 +7,5 @@ edition = "2021"
 
 [dependencies]
 num-bigint = { version = "0.4", features = ["rand"] }
-hex = "0.4"
+const-decoder = "0.2.0"
 rand = "0.8"
