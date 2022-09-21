@@ -95,6 +95,7 @@ dependencies = [
  "cbc",
  "const-decoder",
  "num-bigint",
+ "num-traits",
  "rand",
  "sha1",
 ]

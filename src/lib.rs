@@ -1,13 +1,81 @@
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::{generic_array::GenericArray, BlockCipher, BlockDecrypt, BlockEncrypt, KeyInit};
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, Iv, KeyIvInit};
 use aes::Aes128;
 use num_bigint::{BigUint, RandBigInt};
+use num_traits::identities::Zero;
 use rand::prelude::*;
 use sha1::{Digest, Sha1};
 
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+
+pub struct Attacker {
+    received_messages: Vec<Vec<u8>>,
+    pub p: BigUint,
+}
+
+impl Attacker {
+    pub fn replace_pk(&self, network: &mut NetworkSimulator) -> Result<(), Error> {
+        let original_message = self.empty_network(network)?;
+        match original_message.message_id {
+            MessageId::PubKey => network.send(NetworkMessage {
+                sender_id: original_message.sender_id,
+                message_id: MessageId::PubKey,
+                value: self.p.clone().to_bytes_be(),
+            }),
+            MessageId::Ciphertext => Err(Error::WrongMessageType),
+        }
+    }
+
+    fn empty_network(&self, network: &mut NetworkSimulator) -> Result<NetworkMessage, Error> {
+        let consumed_message = network.consume()?.unwrap();
+        Ok(consumed_message)
+    }
+
+    pub fn new(p: BigUint) -> Self {
+        Self {
+            received_messages: vec![],
+            p,
+        }
+    }
+
+    fn decode_message(&self, ciphertext: Vec<u8>) -> Result<Vec<u8>, Error> {
+        let key: Vec<u8> = BigUint::zero().to_bytes_be();
+
+        // now compute the hash of 0 Bigint
+        let mut hasher = Sha1::new();
+        hasher.update(key);
+        let aes_key: Vec<u8> = hasher.finalize().to_vec();
+        let key = GenericArray::from_slice(&aes_key[..16]);
+
+        let iv: &[u8] = &ciphertext[..16];
+        let ct = &ciphertext[16..];
+
+        let mut buf = [0u8; 48];
+        let cipher = Aes128CbcDec::new(&key, iv.into());
+        let pt = cipher
+            .decrypt_padded_b2b_mut::<Pkcs7>(&ct, &mut buf)
+            .unwrap();
+        Ok(pt.to_vec())
+    }
+
+    pub fn relay_message(&mut self, network: &mut NetworkSimulator) -> Result<(), Error> {
+        let original_message = self.empty_network(network)?;
+        match original_message.message_id {
+            MessageId::PubKey => Err(Error::WrongMessageType),
+            MessageId::Ciphertext => {
+                let decoded_message = self.decode_message(original_message.value.clone())?;
+                self.received_messages.push(decoded_message);
+                network.send(NetworkMessage {
+                    sender_id: original_message.sender_id,
+                    message_id: MessageId::Ciphertext,
+                    value: original_message.value,
+                })
+            }
+        }
+    }
+}
 
 pub struct Participant {
     pub id: String,
@@ -66,11 +134,11 @@ impl Participant {
                 if let Some(aes_key) = &self.aes_key {
                     let key = GenericArray::from_slice(&aes_key[..16]);
 
-                    let iv: [u8; 16] = message.value[..16].try_into().unwrap();
+                    let iv: &[u8] = message.value[..16].try_into().unwrap();
                     let ct = &message.value[16..];
 
                     let mut buf = [0u8; 48];
-                    let cipher = Aes128CbcDec::new(key, &iv.into());
+                    let cipher = Aes128CbcDec::new(key, iv.into());
                     let pt = cipher
                         .decrypt_padded_b2b_mut::<Pkcs7>(&ct, &mut buf)
                         .unwrap();
@@ -138,6 +206,8 @@ pub enum Error {
     WrongCounterparty,
     NoSharedSecret,
     NoAesKey,
+    WrongMessageType,
+    DecryptionError,
 }
 
 pub struct NetworkSimulator {
@@ -222,5 +292,53 @@ mod tests {
         a.receive_message(&mut network).unwrap();
         assert_eq!(a.received_messages.len(), 1);
         assert_eq!(a.received_messages[0], "Hi, Alice".as_bytes().to_vec());
+    }
+
+    #[test]
+    fn test_midm_attack() {
+        let p = BigUint::from_bytes_le(&P_BYTES);
+        let g = 2.to_biguint().unwrap();
+
+        let mut a = Participant::new(g.clone(), p.clone(), "A".to_string(), "B".to_string());
+        let mut b = Participant::new(g.clone(), p.clone(), "B".to_string(), "A".to_string());
+        let mut e = Attacker::new(p.clone());
+
+        let mut network = NetworkSimulator::new();
+        // first A sends its public key to B
+        a.share_pk(&mut network).unwrap();
+        // but Eve intercepts the PK, and instead sends just `p` over to B
+        e.replace_pk(&mut network).unwrap();
+        b.receive_message(&mut network).unwrap();
+        // then B sends its public key to A
+        b.share_pk(&mut network).unwrap();
+        // but again Eve intercepts
+        e.replace_pk(&mut network).unwrap();
+        a.receive_message(&mut network).unwrap();
+
+        // the shared_secret field is only accessible in unit tests
+        let shared_ab = a.shared_secret.clone().unwrap();
+        let shared_ba = b.shared_secret.clone().unwrap();
+
+        // both parties should now have the same shared secret, but unfortunately it's == 0 mod p
+        assert_eq!(shared_ab, BigUint::zero());
+        assert_eq!(shared_ab, shared_ba);
+
+        // now A sends a message to B
+        a.send_encrypted_msg(&mut network, "Hello, Bob!".as_bytes().to_vec())
+            .unwrap();
+        e.relay_message(&mut network).unwrap();
+        b.receive_message(&mut network).unwrap();
+        assert_eq!(b.received_messages.len(), 1);
+        assert_eq!(b.received_messages[0], "Hello, Bob!".as_bytes().to_vec());
+        assert_eq!(e.received_messages[0], "Hello, Bob!".as_bytes().to_vec());
+
+        // and B sends a message to A
+        b.send_encrypted_msg(&mut network, "Hi, Alice".as_bytes().to_vec())
+            .unwrap();
+        e.relay_message(&mut network).unwrap();
+        a.receive_message(&mut network).unwrap();
+        assert_eq!(a.received_messages.len(), 1);
+        assert_eq!(a.received_messages[0], "Hi, Alice".as_bytes().to_vec());
+        assert_eq!(e.received_messages[1], "Hi, Alice".as_bytes().to_vec());
     }
 }
