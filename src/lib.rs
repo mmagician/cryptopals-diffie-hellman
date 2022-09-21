@@ -1,5 +1,13 @@
+use aes::cipher::block_padding::Pkcs7;
+use aes::cipher::{generic_array::GenericArray, BlockCipher, BlockDecrypt, BlockEncrypt, KeyInit};
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::Aes128;
 use num_bigint::{BigUint, RandBigInt};
 use rand::prelude::*;
+use sha1::{Digest, Sha1};
+
+type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
+type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
 pub struct Participant {
     pub id: String,
@@ -8,7 +16,9 @@ pub struct Participant {
     secret: BigUint,
     pub pk: BigUint,
     shared_secret: Option<BigUint>,
+    aes_key: Option<Vec<u8>>,
     counterparty_id: String,
+    received_messages: Vec<Vec<u8>>,
 }
 
 impl Participant {
@@ -24,6 +34,8 @@ impl Participant {
             id,
             shared_secret: None,
             counterparty_id,
+            aes_key: None,
+            received_messages: Vec::new(),
         }
     }
 
@@ -31,18 +43,12 @@ impl Participant {
         received_public.modpow(&self.secret, &self.p)
     }
 
-    pub fn share_message(
-        &self,
-        network: &mut NetworkSimulator,
-        message_id: MessageId,
-    ) -> Result<(), Error> {
-        match message_id {
-            MessageId::PubKey => network.send(NetworkMessage {
-                sender_id: self.id.clone(),
-                value: self.pk.clone(),
-                message_id,
-            }),
-        }
+    pub fn share_pk(&self, network: &mut NetworkSimulator) -> Result<(), Error> {
+        network.send(NetworkMessage {
+            sender_id: self.id.clone(),
+            value: self.pk.clone().to_bytes_be(),
+            message_id: MessageId::PubKey,
+        })
     }
 
     pub fn receive_message(&mut self, network: &mut NetworkSimulator) -> Result<(), Error> {
@@ -52,8 +58,74 @@ impl Participant {
         }
         match message.message_id {
             MessageId::PubKey => {
-                self.shared_secret = Some(self.compute_shared_secret(message.value));
+                let v: BigUint = BigUint::from_bytes_be(&message.value);
+                self.shared_secret = Some(self.compute_shared_secret(v));
+                self.compute_aes_key()?;
             }
+            MessageId::Ciphertext => {
+                if let Some(aes_key) = &self.aes_key {
+                    let key = GenericArray::from_slice(&aes_key[..16]);
+
+                    let iv: [u8; 16] = message.value[..16].try_into().unwrap();
+                    let ct = &message.value[16..];
+
+                    let mut buf = [0u8; 48];
+                    let cipher = Aes128CbcDec::new(key, &iv.into());
+                    let pt = cipher
+                        .decrypt_padded_b2b_mut::<Pkcs7>(&ct, &mut buf)
+                        .unwrap();
+                    self.received_messages.push(pt.to_vec());
+                    println!("Received message: {}", String::from_utf8_lossy(pt));
+                } else {
+                    return Err(Error::NoAesKey);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn compute_aes_key(&mut self) -> Result<(), Error> {
+        // create a Sha1 object
+        let mut hasher = Sha1::new();
+
+        if let Some(secret) = &self.shared_secret {
+            hasher.update(secret.to_bytes_be());
+            self.aes_key = Some(hasher.finalize().to_vec());
+        } else {
+            return Err(Error::NoSharedSecret);
+        }
+
+        Ok(())
+    }
+
+    pub fn send_encrypted_msg(
+        &self,
+        network: &mut NetworkSimulator,
+        msg: Vec<u8>,
+    ) -> Result<(), Error> {
+        if let Some(aes_key) = &self.aes_key {
+            let key = GenericArray::from_slice(&aes_key[..16]);
+            // generate a random IV of 16 bytes
+            let iv = &thread_rng().gen::<[u8; 16]>();
+
+            let truncated_msg: &[u8] = msg.as_slice();
+            let mut buf = [0u8; 48];
+            let cipher = Aes128CbcEnc::new(key, iv.into());
+
+            let ct = cipher
+                .encrypt_padded_b2b_mut::<Pkcs7>(truncated_msg, &mut buf)
+                .unwrap();
+
+            // we know that the iv is 16 bytes
+            let ct_and_iv = [iv, ct].concat();
+
+            network.send(NetworkMessage {
+                sender_id: self.id.clone(),
+                value: ct_and_iv.to_vec(),
+                message_id: MessageId::Ciphertext,
+            })?;
+        } else {
+            return Err(Error::NoAesKey);
         }
         Ok(())
     }
@@ -64,6 +136,8 @@ pub enum Error {
     NetworkFull,
     NetworkEmpty,
     WrongCounterparty,
+    NoSharedSecret,
+    NoAesKey,
 }
 
 pub struct NetworkSimulator {
@@ -73,13 +147,14 @@ pub struct NetworkSimulator {
 #[derive(PartialEq)]
 pub enum MessageId {
     PubKey,
+    Ciphertext,
 }
 
 #[derive(PartialEq)]
 pub struct NetworkMessage {
     pub sender_id: String,
     pub message_id: MessageId,
-    pub value: BigUint,
+    pub value: Vec<u8>,
 }
 
 impl NetworkSimulator {
@@ -122,15 +197,30 @@ mod tests {
 
         let mut network = NetworkSimulator::new();
         // first A sends its public key to B
-        a.share_message(&mut network, MessageId::PubKey).unwrap();
+        a.share_pk(&mut network).unwrap();
         b.receive_message(&mut network).unwrap();
         // then B sends its public key to A
-        b.share_message(&mut network, MessageId::PubKey).unwrap();
+        b.share_pk(&mut network).unwrap();
         a.receive_message(&mut network).unwrap();
 
-        let shared_ab = a.shared_secret.unwrap();
-        let shared_ba = b.shared_secret.unwrap();
+        // the shared_secret field is only accessible in unit tests
+        let shared_ab = a.shared_secret.clone().unwrap();
+        let shared_ba = b.shared_secret.clone().unwrap();
 
         assert_eq!(shared_ab, shared_ba);
+
+        // now A sends a message to B
+        a.send_encrypted_msg(&mut network, "Hello, Bob!".as_bytes().to_vec())
+            .unwrap();
+        b.receive_message(&mut network).unwrap();
+        assert_eq!(b.received_messages.len(), 1);
+        assert_eq!(b.received_messages[0], "Hello, Bob!".as_bytes().to_vec());
+
+        // and B sends a message to A
+        b.send_encrypted_msg(&mut network, "Hi, Alice".as_bytes().to_vec())
+            .unwrap();
+        a.receive_message(&mut network).unwrap();
+        assert_eq!(a.received_messages.len(), 1);
+        assert_eq!(a.received_messages[0], "Hi, Alice".as_bytes().to_vec());
     }
 }
