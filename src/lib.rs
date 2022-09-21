@@ -1,7 +1,7 @@
 use aes::cipher::block_padding::Pkcs7;
-use aes::cipher::{generic_array::GenericArray, BlockCipher, BlockDecrypt, BlockEncrypt, KeyInit};
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, Iv, KeyIvInit};
-use aes::Aes128;
+use aes::cipher::{generic_array::GenericArray};
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+
 use num_bigint::{BigUint, RandBigInt};
 use num_traits::identities::Zero;
 use rand::prelude::*;
@@ -53,9 +53,9 @@ impl Attacker {
         let ct = &ciphertext[16..];
 
         let mut buf = [0u8; 48];
-        let cipher = Aes128CbcDec::new(&key, iv.into());
+        let cipher = Aes128CbcDec::new(key, iv.into());
         let pt = cipher
-            .decrypt_padded_b2b_mut::<Pkcs7>(&ct, &mut buf)
+            .decrypt_padded_b2b_mut::<Pkcs7>(ct, &mut buf)
             .unwrap();
         Ok(pt.to_vec())
     }
@@ -140,7 +140,7 @@ impl Participant {
                     let mut buf = [0u8; 48];
                     let cipher = Aes128CbcDec::new(key, iv.into());
                     let pt = cipher
-                        .decrypt_padded_b2b_mut::<Pkcs7>(&ct, &mut buf)
+                        .decrypt_padded_b2b_mut::<Pkcs7>(ct, &mut buf)
                         .unwrap();
                     self.received_messages.push(pt.to_vec());
                     println!("Received message: {}", String::from_utf8_lossy(pt));
@@ -214,13 +214,13 @@ pub struct NetworkSimulator {
     pub message: Option<NetworkMessage>,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub enum MessageId {
     PubKey,
     Ciphertext,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub struct NetworkMessage {
     pub sender_id: String,
     pub message_id: MessageId,
@@ -233,7 +233,7 @@ impl NetworkSimulator {
     }
 
     pub fn send(&mut self, message: NetworkMessage) -> Result<(), Error> {
-        if self.message != None {
+        if self.message.is_some() {
             return Err(Error::NetworkFull);
         }
         self.message = Some(message);
@@ -241,7 +241,7 @@ impl NetworkSimulator {
     }
 
     pub fn consume(&mut self) -> Result<Option<NetworkMessage>, Error> {
-        if self.message == None {
+        if self.message.is_none() {
             return Err(Error::NetworkEmpty);
         }
         Ok(self.message.take())
@@ -255,7 +255,7 @@ mod tests {
     use num_bigint::{BigUint, ToBigUint};
 
     const P_STR: &[u8] = b"ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca237327ffffffffffffffff";
-    const P_BYTES: [u8; 192] = Decoder::Hex.decode(&P_STR);
+    const P_BYTES: [u8; 192] = Decoder::Hex.decode(P_STR);
 
     #[test]
     fn test_standard_dh() {
@@ -263,7 +263,7 @@ mod tests {
         let g = 2.to_biguint().unwrap();
 
         let mut a = Participant::new(g.clone(), p.clone(), "A".to_string(), "B".to_string());
-        let mut b = Participant::new(g.clone(), p.clone(), "B".to_string(), "A".to_string());
+        let mut b = Participant::new(g, p, "B".to_string(), "A".to_string());
 
         let mut network = NetworkSimulator::new();
         // first A sends its public key to B
@@ -300,8 +300,8 @@ mod tests {
         let g = 2.to_biguint().unwrap();
 
         let mut a = Participant::new(g.clone(), p.clone(), "A".to_string(), "B".to_string());
-        let mut b = Participant::new(g.clone(), p.clone(), "B".to_string(), "A".to_string());
-        let mut e = Attacker::new(p.clone());
+        let mut b = Participant::new(g, p.clone(), "B".to_string(), "A".to_string());
+        let mut e = Attacker::new(p);
 
         let mut network = NetworkSimulator::new();
         // first A sends its public key to B
