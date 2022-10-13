@@ -3,18 +3,19 @@ use aes::cipher::generic_array::GenericArray;
 use aes::cipher::{BlockDecryptMut, KeyIvInit};
 
 use num_bigint::BigUint;
+use num_traits::One;
 use num_traits::identities::Zero;
 
 use sha1::{Digest, Sha1};
 
 use crate::{Aes128CbcDec, Attacker, Error, MessageId, NetworkMessage, NetworkSimulator};
 
-pub struct MIDMattacker {
+pub struct MIDMattackerG1 {
     received_messages: Vec<Vec<u8>>,
     pub p: BigUint,
 }
 
-impl MIDMattacker {
+impl MIDMattackerG1 {
     pub fn new(p: BigUint) -> Self {
         Self {
             received_messages: vec![],
@@ -23,22 +24,15 @@ impl MIDMattacker {
     }
 }
 
-impl Attacker for MIDMattacker {
-    fn replace_pk(&self, network: &mut NetworkSimulator) -> Result<(), Error> {
-        let original_message = self.empty_network(network)?;
-        match original_message.message_id {
-            MessageId::PubKey => network.send(NetworkMessage {
-                sender_id: original_message.sender_id,
-                message_id: MessageId::PubKey,
-                value: self.p.clone().to_bytes_be(),
-            }),
-            MessageId::Ciphertext => Err(Error::WrongMessageType),
-        }
+impl Attacker for MIDMattackerG1 {
+    fn replace_pk(&self, _network: &mut NetworkSimulator) -> Result<(), Error> {
+        // there's nothing to do here, parties were not careful to pick `g`
+        Ok(())
     }
 
     fn decode_message(&self, ciphertext: Vec<u8>) -> Result<Vec<u8>, Error> {
-        // when the attacker replaces A,B with p, the shared secret is 0
-        let key: Vec<u8> = BigUint::zero().to_bytes_be();
+        // the computed shared secret is 1, when g = 1
+        let key: Vec<u8> = BigUint::one().to_bytes_be();
 
         // now compute the hash of 0 Bigint
         let mut hasher = Sha1::new();
@@ -76,11 +70,11 @@ mod tests {
     #[test]
     fn test_midm_attack() {
         let p = BigUint::from_bytes_le(&P_BYTES);
-        let g = 2.to_biguint().unwrap();
+        let g = 1.to_biguint().unwrap();
 
         let mut a = Participant::new(g.clone(), p.clone(), "A".to_string(), "B".to_string());
         let mut b = Participant::new(g, p.clone(), "B".to_string(), "A".to_string());
-        let mut e = MIDMattacker::new(p);
+        let mut e = MIDMattackerG1::new(p);
 
         let mut network = NetworkSimulator::new();
         // first A sends its public key to B

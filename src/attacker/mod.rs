@@ -30,3 +30,4 @@ pub trait Attacker {
 }
 
 pub mod midm;
+pub mod midm_g1;
