@@ -32,7 +32,7 @@ impl Attacker for MIDMattackerGpMin1 {
                 message_id: MessageId::PubKey,
                 value: original_message.value.clone(),
             }),
-            MessageId::Ciphertext => Err(Error::WrongMessageType),
+            _ => Err(Error::WrongMessageType),
         }?;
         self.receive_message(original_message.value);
         Ok(())

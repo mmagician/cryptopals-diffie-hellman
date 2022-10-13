@@ -7,16 +7,20 @@ pub enum Error {
     NoAesKey,
     WrongMessageType,
     DecryptionError,
+    ValidationError,
 }
 
 pub struct NetworkSimulator {
-    pub message: Option<NetworkMessage>,
+    pub messages: Vec<NetworkMessage>,
 }
 
 #[derive(PartialEq, Eq)]
 pub enum MessageId {
     PubKey,
     Ciphertext,
+    Email,
+    Salt,
+    HMAC,
 }
 
 #[derive(PartialEq, Eq)]
@@ -28,21 +32,20 @@ pub struct NetworkMessage {
 
 impl NetworkSimulator {
     pub fn new() -> Self {
-        Self { message: None }
+        Self {
+            messages: Vec::new(),
+        }
     }
 
     pub fn send(&mut self, message: NetworkMessage) -> Result<(), Error> {
-        if self.message.is_some() {
-            return Err(Error::NetworkFull);
-        }
-        self.message = Some(message);
+        self.messages.push(message);
         Ok(())
     }
 
     pub fn consume(&mut self) -> Result<Option<NetworkMessage>, Error> {
-        if self.message.is_none() {
+        if self.messages.is_empty() {
             return Err(Error::NetworkEmpty);
         }
-        Ok(self.message.take())
+        Ok(self.messages.pop())
     }
 }
