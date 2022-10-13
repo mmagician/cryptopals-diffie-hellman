@@ -7,15 +7,24 @@ use num_traits::identities::Zero;
 
 use sha1::{Digest, Sha1};
 
-use crate::{Aes128CbcDec, Error, MessageId, NetworkMessage, NetworkSimulator};
+use crate::{Aes128CbcDec, Attacker, Error, MessageId, NetworkMessage, NetworkSimulator};
 
-pub struct Attacker {
+pub struct MIDMattacker {
     received_messages: Vec<Vec<u8>>,
     pub p: BigUint,
 }
 
-impl Attacker {
-    pub fn replace_pk(&self, network: &mut NetworkSimulator) -> Result<(), Error> {
+impl MIDMattacker {
+    pub fn new(p: BigUint) -> Self {
+        Self {
+            received_messages: vec![],
+            p,
+        }
+    }
+}
+
+impl Attacker for MIDMattacker {
+    fn replace_pk(&self, network: &mut NetworkSimulator) -> Result<(), Error> {
         let original_message = self.empty_network(network)?;
         match original_message.message_id {
             MessageId::PubKey => network.send(NetworkMessage {
@@ -24,18 +33,6 @@ impl Attacker {
                 value: self.p.clone().to_bytes_be(),
             }),
             MessageId::Ciphertext => Err(Error::WrongMessageType),
-        }
-    }
-
-    fn empty_network(&self, network: &mut NetworkSimulator) -> Result<NetworkMessage, Error> {
-        let consumed_message = network.consume()?.unwrap();
-        Ok(consumed_message)
-    }
-
-    pub fn new(p: BigUint) -> Self {
-        Self {
-            received_messages: vec![],
-            p,
         }
     }
 
@@ -59,20 +56,8 @@ impl Attacker {
         Ok(pt.to_vec())
     }
 
-    pub fn relay_message(&mut self, network: &mut NetworkSimulator) -> Result<(), Error> {
-        let original_message = self.empty_network(network)?;
-        match original_message.message_id {
-            MessageId::PubKey => Err(Error::WrongMessageType),
-            MessageId::Ciphertext => {
-                let decoded_message = self.decode_message(original_message.value.clone())?;
-                self.received_messages.push(decoded_message);
-                network.send(NetworkMessage {
-                    sender_id: original_message.sender_id,
-                    message_id: MessageId::Ciphertext,
-                    value: original_message.value,
-                })
-            }
-        }
+    fn receive_message(&mut self, msg: Vec<u8>) {
+        self.received_messages.push(msg);
     }
 }
 
@@ -94,7 +79,7 @@ mod tests {
 
         let mut a = Participant::new(g.clone(), p.clone(), "A".to_string(), "B".to_string());
         let mut b = Participant::new(g, p.clone(), "B".to_string(), "A".to_string());
-        let mut e = Attacker::new(p);
+        let mut e = MIDMattacker::new(p);
 
         let mut network = NetworkSimulator::new();
         // first A sends its public key to B

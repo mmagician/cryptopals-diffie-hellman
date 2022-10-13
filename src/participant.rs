@@ -133,7 +133,7 @@ impl Participant {
 
 #[cfg(test)]
 mod tests {
-    use crate::Attacker;
+    use crate::{midm::MIDMattacker, Attacker};
 
     use super::*;
     use const_decoder::Decoder;
@@ -187,7 +187,7 @@ mod tests {
 
         let mut a = Participant::new(g.clone(), p.clone(), "A".to_string(), "B".to_string());
         let mut b = Participant::new(g, p.clone(), "B".to_string(), "A".to_string());
-        let mut e = Attacker::new(p);
+        let mut e = MIDMattacker::new(p);
 
         let mut network = NetworkSimulator::new();
         // first A sends its public key to B
