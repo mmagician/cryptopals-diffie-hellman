@@ -32,7 +32,7 @@ impl Attacker for MIDMattacker {
                 message_id: MessageId::PubKey,
                 value: self.p.clone().to_bytes_be(),
             }),
-            MessageId::Ciphertext => Err(Error::WrongMessageType),
+            _ => Err(Error::WrongMessageType),
         }
     }
 

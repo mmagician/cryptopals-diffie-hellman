@@ -13,7 +13,6 @@ pub trait Attacker {
     fn relay_message(&mut self, network: &mut NetworkSimulator) -> Result<(), Error> {
         let original_message = self.empty_network(network)?;
         match original_message.message_id {
-            MessageId::PubKey => Err(Error::WrongMessageType),
             MessageId::Ciphertext => {
                 let decoded_message = self.decode_message(original_message.value.clone())?;
                 self.receive_message(decoded_message);
@@ -23,6 +22,7 @@ pub trait Attacker {
                     value: original_message.value,
                 })
             }
+            _ => Err(Error::WrongMessageType),
         }
     }
 

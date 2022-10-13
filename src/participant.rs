@@ -80,6 +80,7 @@ impl Participant {
                     return Err(Error::NoAesKey);
                 }
             }
+            _ => todo!(),
         }
         Ok(())
     }
