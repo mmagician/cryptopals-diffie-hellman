@@ -13,9 +13,9 @@ pub struct Participant {
     pub id: String,
     pub g: BigUint,
     pub p: BigUint,
-    secret: BigUint,
+    pub secret: BigUint,
     pub pk: BigUint,
-    shared_secret: Option<BigUint>,
+    pub shared_secret: Option<BigUint>,
     aes_key: Option<Vec<u8>>,
     counterparty_id: String,
     received_messages: Vec<Vec<u8>>,
@@ -39,8 +39,8 @@ impl Participant {
         }
     }
 
-    pub fn compute_shared_secret(&self, received_public: &BigUint) -> BigUint {
-        received_public.modpow(&self.secret, &self.p)
+    pub fn compute_shared_secret(&mut self, received_public: &BigUint) {
+        self.shared_secret = Some(received_public.modpow(&self.secret, &self.p));
     }
 
     pub fn share_pk(&self, network: &mut NetworkSimulator) -> Result<(), Error> {
@@ -59,7 +59,7 @@ impl Participant {
         match message.message_id {
             MessageId::PubKey => {
                 let v: BigUint = BigUint::from_bytes_be(&message.value);
-                self.shared_secret = Some(self.compute_shared_secret(&v));
+                self.compute_shared_secret(&v);
                 self.compute_aes_key()?;
             }
             MessageId::Ciphertext => {
