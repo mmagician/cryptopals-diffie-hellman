@@ -39,7 +39,7 @@ impl Participant {
         }
     }
 
-    pub fn compute_shared_secret(&self, received_public: BigUint) -> BigUint {
+    pub fn compute_shared_secret(&self, received_public: &BigUint) -> BigUint {
         received_public.modpow(&self.secret, &self.p)
     }
 
@@ -59,7 +59,7 @@ impl Participant {
         match message.message_id {
             MessageId::PubKey => {
                 let v: BigUint = BigUint::from_bytes_be(&message.value);
-                self.shared_secret = Some(self.compute_shared_secret(v));
+                self.shared_secret = Some(self.compute_shared_secret(&v));
                 self.compute_aes_key()?;
             }
             MessageId::Ciphertext => {
