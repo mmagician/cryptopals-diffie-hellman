@@ -7,14 +7,14 @@ use num_traits::One;
 
 use sha1::{Digest, Sha1};
 
-use crate::{Aes128CbcDec, Attacker, Error, NetworkSimulator};
+use crate::{Aes128CbcDec, Attacker, Error, MessageId, NetworkMessage, NetworkSimulator};
 
-pub struct MIDMattackerG1 {
+pub struct MIDMattackerGpMin1 {
     received_messages: Vec<Vec<u8>>,
     pub p: BigUint,
 }
 
-impl MIDMattackerG1 {
+impl MIDMattackerGpMin1 {
     pub fn new(p: BigUint) -> Self {
         Self {
             received_messages: vec![],
@@ -23,15 +23,36 @@ impl MIDMattackerG1 {
     }
 }
 
-impl Attacker for MIDMattackerG1 {
-    fn replace_pk(&mut self, _network: &mut NetworkSimulator) -> Result<(), Error> {
-        // there's nothing to do here, parties were not careful to pick `g`
+impl Attacker for MIDMattackerGpMin1 {
+    fn replace_pk(&mut self, network: &mut NetworkSimulator) -> Result<(), Error> {
+        let original_message = self.empty_network(network)?;
+        match original_message.message_id {
+            MessageId::PubKey => network.send(NetworkMessage {
+                sender_id: original_message.sender_id,
+                message_id: MessageId::PubKey,
+                value: original_message.value.clone(),
+            }),
+            MessageId::Ciphertext => Err(Error::WrongMessageType),
+        }?;
+        self.receive_message(original_message.value);
         Ok(())
     }
 
     fn decode_message(&self, ciphertext: Vec<u8>) -> Result<Vec<u8>, Error> {
-        // the computed shared secret is 1, when g = 1
-        let key: Vec<u8> = BigUint::one().to_bytes_be();
+        // when g = p -1, the pub keys are either 1 or -1
+        let pk_a = BigUint::from_bytes_be(&self.received_messages[0]);
+        let pk_b = BigUint::from_bytes_be(&self.received_messages[1]);
+
+        let shared_secret = if pk_a == BigUint::one() {
+            // if `A` is 1, then `a` must have been even.
+            // regardless of whether `B` is -1 or 1, raising it to an even power = 1
+            BigUint::one()
+        } else {
+            // if `A` is -1, then `a` must have been odd. We simply return `B` as the shared secret.
+            // if `B` is -1, then -1^odd = -1, and if B = 1, then 1^odd = 1
+            pk_b
+        };
+        let key = shared_secret.to_bytes_be();
 
         // now compute the hash of 0 Bigint
         let mut hasher = Sha1::new();
@@ -61,7 +82,7 @@ mod tests {
 
     use super::*;
     use const_decoder::Decoder;
-    use num_bigint::{BigUint, ToBigUint};
+    use num_bigint::BigUint;
 
     const P_STR: &[u8] = b"ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a08798e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da48361c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804f1746c08ca237327ffffffffffffffff";
     const P_BYTES: [u8; 192] = Decoder::Hex.decode(P_STR);
@@ -69,11 +90,11 @@ mod tests {
     #[test]
     fn test_midm_attack() {
         let p = BigUint::from_bytes_le(&P_BYTES);
-        let g = 1.to_biguint().unwrap();
+        let g = p.clone() - BigUint::one();
 
         let mut a = Participant::new(g.clone(), p.clone(), "A".to_string(), "B".to_string());
         let mut b = Participant::new(g, p.clone(), "B".to_string(), "A".to_string());
-        let mut e = MIDMattackerG1::new(p);
+        let mut e = MIDMattackerGpMin1::new(p);
 
         let mut network = NetworkSimulator::new();
         // first A sends its public key to B
@@ -92,13 +113,19 @@ mod tests {
             .unwrap();
         e.relay_message(&mut network).unwrap();
         b.receive_message(&mut network).unwrap();
-        assert_eq!(e.received_messages[0], "Hello, Bob!".as_bytes().to_vec());
+        assert_eq!(
+            *e.received_messages.last().unwrap(),
+            "Hello, Bob!".as_bytes().to_vec()
+        );
 
         // and B sends a message to A
         b.send_encrypted_msg(&mut network, "Hi, Alice".as_bytes().to_vec())
             .unwrap();
         e.relay_message(&mut network).unwrap();
         a.receive_message(&mut network).unwrap();
-        assert_eq!(e.received_messages[1], "Hi, Alice".as_bytes().to_vec());
+        assert_eq!(
+            *e.received_messages.last().unwrap(),
+            "Hi, Alice".as_bytes().to_vec()
+        );
     }
 }

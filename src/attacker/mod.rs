@@ -31,3 +31,5 @@ pub trait Attacker {
 
 pub mod midm;
 pub mod midm_g1;
+pub mod midm_gp;
+pub mod midm_gp_min1;
