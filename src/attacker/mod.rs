@@ -1,7 +1,7 @@
 use crate::{Error, MessageId, NetworkMessage, NetworkSimulator};
 
 pub trait Attacker {
-    fn replace_pk(&self, network: &mut NetworkSimulator) -> Result<(), Error>;
+    fn replace_pk(&mut self, network: &mut NetworkSimulator) -> Result<(), Error>;
 
     fn empty_network(&self, network: &mut NetworkSimulator) -> Result<NetworkMessage, Error> {
         let consumed_message = network.consume()?.unwrap();

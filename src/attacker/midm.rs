@@ -24,7 +24,7 @@ impl MIDMattacker {
 }
 
 impl Attacker for MIDMattacker {
-    fn replace_pk(&self, network: &mut NetworkSimulator) -> Result<(), Error> {
+    fn replace_pk(&mut self, network: &mut NetworkSimulator) -> Result<(), Error> {
         let original_message = self.empty_network(network)?;
         match original_message.message_id {
             MessageId::PubKey => network.send(NetworkMessage {

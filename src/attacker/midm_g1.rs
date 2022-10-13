@@ -25,7 +25,7 @@ impl MIDMattackerG1 {
 }
 
 impl Attacker for MIDMattackerG1 {
-    fn replace_pk(&self, _network: &mut NetworkSimulator) -> Result<(), Error> {
+    fn replace_pk(&mut self, _network: &mut NetworkSimulator) -> Result<(), Error> {
         // there's nothing to do here, parties were not careful to pick `g`
         Ok(())
     }
